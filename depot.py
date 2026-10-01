@@ -31,7 +31,14 @@ def lese_csv(datei):
 
         except Exception:
             pass
-
+    df.columns = (
+        df.columns
+        .str.replace("\n", " ", regex=False)
+        .str.replace("\r", " ", regex=False)
+        .str.replace("/", " ")
+        .str.replace("  ", " ")
+        .str.strip()
+    )
     raise Exception("Datei konnte nicht gelesen werden")
 
 
@@ -107,7 +114,7 @@ def erstelle_monatliche_bestaende(df):
     monate = pd.date_range(
         start=start,
         end=ende,
-        freq="M"
+        freq="ME"
     )
 
     ergebnis = []
@@ -160,7 +167,9 @@ def erstelle_monatliche_bestaende(df):
                     "bestand": round(stueck, 6)
                 }
             )
+                
 
+    
     return pd.DataFrame(ergebnis)
 
 
@@ -181,6 +190,8 @@ def main():
         print(c)
 
     df = vorbereiten(df)
+
+
 
     monatliche_bestaende = (
         erstelle_monatliche_bestaende(df)
