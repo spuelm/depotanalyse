@@ -285,7 +285,7 @@ def erstelle_pivot_tabelle(historie_df, output_file):
 
     pivot = historie_df.pivot_table(
         index="monat",
-        columns="wertpapier",
+        columns="isin",
         values="bestand",
         aggfunc="last",
         fill_value=0
@@ -299,6 +299,8 @@ def erstelle_pivot_tabelle(historie_df, output_file):
         decimal=",",
         index=False
     )
+    pivot = pivot.sort_index()
+    pivot = pivot.reset_index()
 
     print(        f"Pivot-Tabelle geschrieben: {output_file}")
 
@@ -358,22 +360,99 @@ def cashflow_pro_monat(OUTPUT_DIR, KAUF, VERKAUF, WP_EINLAGE, WP_ENTNAHME, df, m
     )
     return cashflow_df
 
-
-print("Lade Wertpapierliste...")
-aktive_isins = wertepapierliste_laden(WERTPAPIERE_FILE)
-print(f"Aktive Wertpapiere: {len(aktive_isins)}")
-print("Lade DKB Export...")
-df = transaktionen_laden(TRANSACTIONS_FILE, RELEVANTE_VORGAENGE, euro_to_float, aktive_isins)
-print(f"Relevante Transaktionen: {len(df)}")
-
-print("Berechne aktuelle Bestände...")
-bestandsliste = berechne_aktuelle_bestaende(OUTPUT_DIR, KAUF, VERKAUF, WP_EINLAGE, WP_ENTNAHME, aktive_isins, df)
-monate, historie_df = berechne_monatliche_bestaende(OUTPUT_DIR, KAUF, VERKAUF, WP_EINLAGE, WP_ENTNAHME, aktive_isins, df)
-cashflow_df = cashflow_pro_monat(OUTPUT_DIR, KAUF, VERKAUF, WP_EINLAGE, WP_ENTNAHME, df, monate)
-
-erstelle_pivot_tabelle( historie_df,    OUTPUT_DIR / "pivot_monatsbestaende.csv")
+#--------------------------------------------------
+# Pivot-Tabelle für investiert erstellen
+#--------------------------------------------------
 
 
-print()
-print("Fertig")
-print(bestandsliste.head(20))
+def erstelle_investiert_pivot(historie_df, output_file):
+
+    pivot = historie_df.pivot_table(
+        index="monat",
+        columns="isin",
+        values="investiert",
+        aggfunc="last",
+        fill_value=0
+    )
+
+    pivot = pivot.reset_index()
+
+    pivot.to_csv(
+        output_file,
+        sep=";",
+        decimal=",",
+        index=False
+    )
+    pivot = pivot.sort_index()
+    pivot = pivot.reset_index()
+    print(
+        f"Investiert-Pivot geschrieben: {output_file}"
+    )
+
+    return pivot
+
+
+
+def main():
+
+    print("Lade Wertpapierliste...")
+    aktive_isins = wertepapierliste_laden(WERTPAPIERE_FILE)
+
+    print(f"Aktive Wertpapiere: {len(aktive_isins)}")
+
+    print("Lade DKB Export...")
+    df = transaktionen_laden(
+        TRANSACTIONS_FILE,
+        RELEVANTE_VORGAENGE,
+        euro_to_float,
+        aktive_isins
+    )
+
+    print(f"Relevante Transaktionen: {len(df)}")
+
+    bestandsliste = berechne_aktuelle_bestaende(
+        OUTPUT_DIR,
+        KAUF,
+        VERKAUF,
+        WP_EINLAGE,
+        WP_ENTNAHME,
+        aktive_isins,
+        df
+    )
+
+    monate, historie_df = berechne_monatliche_bestaende(
+        OUTPUT_DIR,
+        KAUF,
+        VERKAUF,
+        WP_EINLAGE,
+        WP_ENTNAHME,
+        aktive_isins,
+        df
+    )
+
+    cashflow_df = cashflow_pro_monat(
+        OUTPUT_DIR,
+        KAUF,
+        VERKAUF,
+        WP_EINLAGE,
+        WP_ENTNAHME,
+        df,
+        monate
+    )
+
+    erstelle_pivot_tabelle(
+        historie_df,
+        OUTPUT_DIR / "pivot_monatsbestaende.csv"
+    )
+
+    erstelle_investiert_pivot(
+        historie_df,
+        OUTPUT_DIR / "pivot_investiert.csv"
+    )
+
+    print("\nFertig")
+    print(bestandsliste.head(20))
+
+
+if __name__ == "__main__":
+    main()
