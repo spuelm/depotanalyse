@@ -1,223 +1,329 @@
-import pandas as pd
 from pathlib import Path
-from collections import defaultdict
+import pandas as pd
 
-CSV_DATEI = "data/Wertpapiertransaktionen.csv"
-OUTPUT_DATEI = "output/monatliche_bestaende.csv"
+# --------------------------------------------------
+# Pfade
+# --------------------------------------------------
 
+BASE_DIR = Path(__file__).parent
 
-def lese_csv(datei):
-    encodings = [
-        "utf-8",
-        "utf-16",
-        "utf-16-le",
-        "cp1252",
-        "latin1"
-    ]
+TRANSACTIONS_FILE = BASE_DIR / "data" / "Wertpapiertransaktionen.csv"
+WERTPAPIERE_FILE = BASE_DIR / "config" / "wertpapiere.csv"
 
-    for enc in encodings:
-        try:
-            print(f"Lese Datei mit {enc}")
+OUTPUT_DIR = BASE_DIR / "output"
+OUTPUT_DIR.mkdir(exist_ok=True)
 
-            df = pd.read_csv(
-                datei,
-                sep=";",
-                decimal=",",
-                encoding=enc
-            )
+# --------------------------------------------------
+# Konfiguration
+# --------------------------------------------------
 
-            print(f"Erfolgreich mit {enc}")
-            return df
+KAUF = "Kauf"
+VERKAUF = "Verkauf"
+WP_EINLAGE = "WP-Einlage"
+WP_ENTNAHME = "WP-Entnahme"
 
-        except Exception:
-            pass
-    df.columns = (
-        df.columns
-        .str.replace("\n", " ", regex=False)
-        .str.replace("\r", " ", regex=False)
-        .str.replace("/", " ")
-        .str.replace("  ", " ")
-        .str.strip()
+RELEVANTE_VORGAENGE = [
+    KAUF,
+    VERKAUF,
+    WP_EINLAGE,
+    WP_ENTNAHME
+]
+
+# --------------------------------------------------
+# Hilfsfunktion
+# --------------------------------------------------
+
+def euro_to_float(value):
+
+    if pd.isna(value):
+        return 0.0
+
+    value = str(value).strip()
+
+    if value == "":
+        return 0.0
+
+    value = (
+        value
+        .replace(".", "")
+        .replace(",", ".")
     )
-    raise Exception("Datei konnte nicht gelesen werden")
-
-
-def finde_spalte(df, kandidaten):
-
-    for kandidat in kandidaten:
-        for spalte in df.columns:
-            if kandidat.lower() in spalte.lower():
-                return spalte
-
-    raise Exception(
-        f"Keine passende Spalte gefunden für {kandidaten}"
-    )
-
-
-def bereinige_stueck(wert):
 
     try:
-        return float(
-            str(wert)
-            .replace(".", "")
-            .replace(",", ".")
-        )
-    except Exception:
+        return float(value)
+    except:
         return 0.0
 
 
-def vorbereiten(df):
+# --------------------------------------------------
+# Wertpapierliste laden
+# --------------------------------------------------
 
-    datum_spalte = finde_spalte(
-        df,
-        ["Datum","Buchungstag"]
+print("Lade Wertpapierliste...")
+
+wp_liste = pd.read_csv(
+    WERTPAPIERE_FILE,
+    sep=";"
+)
+
+wp_liste["isin"] = (
+    wp_liste["isin"]
+    .astype(str)
+    .str.strip()
+)
+
+wp_liste["aktiv"] = pd.to_numeric(
+    wp_liste["aktiv"],
+    errors="coerce"
+).fillna(0)
+
+aktive_isins = set(
+    wp_liste.loc[
+        wp_liste["aktiv"] == 1,
+        "isin"
+    ]
+)
+
+print(f"Aktive Wertpapiere: {len(aktive_isins)}")
+
+# --------------------------------------------------
+# Transaktionen laden
+# --------------------------------------------------
+
+print("Lade DKB Export...")
+
+df = pd.read_csv(
+    TRANSACTIONS_FILE,
+    sep=";",
+    encoding="utf-16"
+)
+
+df["ISIN"] = (
+    df["ISIN"]
+    .astype(str)
+    .str.strip()
+)
+
+# nur aktive Isins
+df = df[df["ISIN"].isin(aktive_isins)]
+
+# nur relevante Vorgänge
+df = df[
+    df["Vorgang"].isin(
+        RELEVANTE_VORGAENGE
     )
+]
 
-    df["buchungsdatum"] = pd.to_datetime(
-        df[datum_spalte],
-        dayfirst=True,
-        errors="coerce"
-    )
+print(f"Relevante Transaktionen: {len(df)}")
 
-    df = df.sort_values(
-        "buchungsdatum"
-    )
+# --------------------------------------------------
+# Datum
+# --------------------------------------------------
 
-    return df
+df["Buchungstag"] = pd.to_datetime(
+    df["Buchungstag"],
+    format="%d.%m.%Y",
+    errors="coerce"
+)
 
+df = df.dropna(
+    subset=["Buchungstag"]
+)
 
-def erstelle_monatliche_bestaende(df):
+# --------------------------------------------------
+# Zahlenfelder
+# --------------------------------------------------
 
-    vorgang_spalte = finde_spalte(
-        df,
-        ["Vorgang"]
-    )
+df["Stück / Nennwert"] = (
+    df["Stück / Nennwert"]
+    .astype(str)
+    .str.replace(".", "", regex=False)
+    .str.replace(",", ".", regex=False)
+)
 
-    isin_spalte = finde_spalte(
-        df,
-        ["ISIN"]
-    )
+df["Stück / Nennwert"] = pd.to_numeric(
+    df["Stück / Nennwert"],
+    errors="coerce"
+).fillna(0)
 
-    bezeichnung_spalte = finde_spalte(
-        df,
-        ["Wertpapier", "Bezeichnung"]
-    )
+df["Soll_float"] = df["Soll"].apply(
+    euro_to_float
+)
 
-    stueck_spalte = finde_spalte(
-        df,
-        ["Stück", "Anzahl"]
-    )
+df["Haben_float"] = df["Haben"].apply(
+    euro_to_float
+)
 
-    start = df["buchungsdatum"].min()
-    ende = df["buchungsdatum"].max()
+# --------------------------------------------------
+# Aktuelle Bestände
+# --------------------------------------------------
 
-    monate = pd.date_range(
-        start=start,
-        end=ende,
-        freq="ME"
-    )
+print("Berechne aktuelle Bestände...")
 
-    ergebnis = []
+bestandsdaten = []
 
-    for monat in monate:
+for isin in sorted(aktive_isins):
 
-        bestand = defaultdict(float)
+    wp = df[df["ISIN"] == isin]
 
-        transaktionen = df[
-            df["buchungsdatum"] <= monat
+    bestand = 0
+
+    for _, row in wp.iterrows():
+
+        if row["Vorgang"] in [KAUF, WP_EINLAGE]:
+            bestand += row["Stück / Nennwert"]
+
+        elif row["Vorgang"] in [VERKAUF, WP_ENTNAHME]:
+            bestand -= row["Stück / Nennwert"]
+
+    if len(wp) > 0:
+
+        bestandsdaten.append(
+            {
+                "isin": isin,
+                "wertpapier": wp.iloc[0]["Wertpapier"],
+                "bestand": round(bestand, 3),
+            }
+        )
+
+bestandsliste = pd.DataFrame(
+    bestandsdaten
+)
+
+bestandsliste.sort_values(
+    "wertpapier"
+).to_csv(
+    OUTPUT_DIR / "bestandsliste.csv",
+    sep=";",
+    decimal=",",
+    index=False
+)
+
+# --------------------------------------------------
+# Monatliche Bestände
+# --------------------------------------------------
+
+print("Berechne Monatsbestände...")
+
+start = df["Buchungstag"].min()
+ende = df["Buchungstag"].max()
+
+print(f"Zeitraum: {start.date()} bis {ende.date()}")
+
+monate = pd.date_range(
+    start=start,
+    end=ende,
+    freq="M"
+)
+
+monatsdaten = []
+
+for monat in monate:
+
+    trans_bis_monat = df[
+        df["Buchungstag"] <= monat
+    ]
+
+    for isin in aktive_isins:
+
+        wp = trans_bis_monat[
+            trans_bis_monat["ISIN"] == isin
         ]
 
-        namen = {}
+        if wp.empty:
+            continue
 
-        for _, row in transaktionen.iterrows():
+        bestand = 0.0
+        investiert = 0.0
 
-            isin = str(row[isin_spalte]).strip()
-            vorgang = str(row[vorgang_spalte]).strip()
+        for _, row in wp.iterrows():
 
-            stueck = bereinige_stueck(
-                row[stueck_spalte]
+            if row["Vorgang"] in [KAUF, WP_EINLAGE]:
+
+                bestand += row["Stück / Nennwert"]
+                investiert += row["Soll_float"]
+
+            elif row["Vorgang"] in [VERKAUF, WP_ENTNAHME]:
+
+                bestand -= row["Stück / Nennwert"]
+                investiert -= row["Haben_float"]
+
+        monatsdaten.append(
+            {
+                "monat": monat.strftime("%Y-%m"),
+                "isin": isin,
+                "wertpapier": wp.iloc[0]["Wertpapier"],
+                "bestand": round(bestand, 3),
+                "investiert": round(investiert, 2),
+            }
+        )
+
+historie_df = pd.DataFrame(
+    monatsdaten
+)
+
+print(
+    f"Monatseinträge: {len(historie_df)}"
+)
+
+historie_df.to_csv(
+    OUTPUT_DIR / "monatsbestaende.csv",
+    sep=";",
+    decimal=",",
+    index=False
+)
+
+# --------------------------------------------------
+# Cashflow pro Monat
+# --------------------------------------------------
+
+cashflow = []
+
+for monat in monate:
+
+    monats_df = df[
+        (df["Buchungstag"].dt.year == monat.year)
+        &
+        (df["Buchungstag"].dt.month == monat.month)
+    ]
+
+    einzahlungen = monats_df.loc[
+        monats_df["Vorgang"].isin(
+            [KAUF, WP_EINLAGE]
+        ),
+        "Soll_float"
+    ].sum()
+
+    auszahlungen = monats_df.loc[
+        monats_df["Vorgang"].isin(
+            [VERKAUF, WP_ENTNAHME]
+        ),
+        "Haben_float"
+    ].sum()
+
+    cashflow.append(
+        {
+            "monat": monat.strftime("%Y-%m"),
+            "einzahlungen": round(einzahlungen, 2),
+            "auszahlungen": round(auszahlungen, 2),
+            "netto": round(
+                einzahlungen - auszahlungen,
+                2
             )
-
-            namen[isin] = str(
-                row[bezeichnung_spalte]
-            )
-
-            if vorgang in [
-                "Kauf",
-                "WP-Einlage"
-            ]:
-                bestand[isin] += stueck
-
-            elif vorgang in [
-                "Verkauf",
-                "WP-Entnahme"
-            ]:
-                bestand[isin] -= stueck
-
-        for isin, stueck in bestand.items():
-
-            if abs(stueck) < 0.00001:
-                continue
-
-            ergebnis.append(
-                {
-                    "monat": monat.date(),
-                    "isin": isin,
-                    "wertpapier": namen[isin],
-                    "bestand": round(stueck, 6)
-                }
-            )
-                
-
-    
-    return pd.DataFrame(ergebnis)
-
-
-def main():
-
-    if not Path(CSV_DATEI).exists():
-        print(f"Datei fehlt: {CSV_DATEI}")
-        return
-
-    Path("output").mkdir(
-        exist_ok=True
+        }
     )
 
-    df = lese_csv(CSV_DATEI)
+cashflow_df = pd.DataFrame(
+    cashflow
+)
 
-    print("\nGefundene Spalten:")
-    for c in df.columns:
-        print(c)
+cashflow_df.to_csv(
+    OUTPUT_DIR / "cashflow_monatlich.csv",
+    sep=";",
+    decimal=",",
+    index=False
+)
 
-    df = vorbereiten(df)
-
-
-
-    monatliche_bestaende = (
-        erstelle_monatliche_bestaende(df)
-    )
-
-    monatliche_bestaende.to_csv(
-        OUTPUT_DATEI,
-        sep=";",
-        decimal=",",
-        index=False
-    )
-
-    print("\nDatei erstellt:")
-    print(OUTPUT_DATEI)
-
-    print("\nLetzter Monat:")
-    print(
-        monatliche_bestaende[
-            monatliche_bestaende["monat"]
-            ==
-            monatliche_bestaende["monat"].max()
-        ]
-        .sort_values("wertpapier")
-        .tail(20)
-    )
-
-
-if __name__ == "__main__":
-    main()
+print()
+print("Fertig")
+print(bestandsliste.head())
