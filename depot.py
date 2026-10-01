@@ -55,130 +55,133 @@ def euro_to_float(value):
         return 0.0
 
 
+
+
+
+
+
+
 # --------------------------------------------------
 # Wertpapierliste laden
 # --------------------------------------------------
-
-print("Lade Wertpapierliste...")
-
-wp_liste = pd.read_csv(
+def wertepapierliste_laden(WERTPAPIERE_FILE):
+    wp_liste = pd.read_csv(
     WERTPAPIERE_FILE,
     sep=";"
-)
+    )
 
-wp_liste["isin"] = (
+    wp_liste["isin"] = (
     wp_liste["isin"]
     .astype(str)
     .str.strip()
-)
+    )
 
-wp_liste["aktiv"] = pd.to_numeric(
-    wp_liste["aktiv"],
-    errors="coerce"
-).fillna(0)
+    wp_liste["aktiv"] = pd.to_numeric(
+        wp_liste["aktiv"],
+        errors="coerce"
+    ).fillna(0)
 
-aktive_isins = set(
+    aktive_isins = set(
     wp_liste.loc[
         wp_liste["aktiv"] == 1,
         "isin"
-    ]
-)
+        ]
+    )
+    return aktive_isins
 
-print(f"Aktive Wertpapiere: {len(aktive_isins)}")
+
 
 # --------------------------------------------------
 # Transaktionen laden
 # --------------------------------------------------
 
-print("Lade DKB Export...")
-
-df = pd.read_csv(
+def transaktionen_laden(TRANSACTIONS_FILE, RELEVANTE_VORGAENGE, euro_to_float, aktive_isins):
+    df = pd.read_csv(
     TRANSACTIONS_FILE,
     sep=";",
     encoding="utf-16"
-)
+    )
 
-df["ISIN"] = (
+    df["ISIN"] = (
     df["ISIN"]
     .astype(str)
     .str.strip()
-)
-
-# nur aktive Isins
-df = df[df["ISIN"].isin(aktive_isins)]
-
-# nur relevante Vorgänge
-df = df[
-    df["Vorgang"].isin(
-        RELEVANTE_VORGAENGE
     )
-]
 
-print(f"Relevante Transaktionen: {len(df)}")
+    # nur aktive Isins
+    df = df[df["ISIN"].isin(aktive_isins)]
 
-# --------------------------------------------------
-# Datum
-# --------------------------------------------------
+    # nur relevante Vorgänge
+    df = df[
+        df["Vorgang"].isin(
+            RELEVANTE_VORGAENGE
+        )
+    ]
 
-df["Buchungstag"] = pd.to_datetime(
+    # --------------------------------------------------
+    # Datum
+    # --------------------------------------------------
+
+    df["Buchungstag"] = pd.to_datetime(
     df["Buchungstag"],
     format="%d.%m.%Y",
     errors="coerce"
-)
+    )
 
-df = df.dropna(
+    df = df.dropna(
     subset=["Buchungstag"]
-)
+    )
 
-# --------------------------------------------------
-# Zahlenfelder
-# --------------------------------------------------
+    # --------------------------------------------------
+    # Zahlenfelder
+    # --------------------------------------------------
 
-df["Stück / Nennwert"] = (
+    df["Stück / Nennwert"] = (
     df["Stück / Nennwert"]
     .astype(str)
     .str.replace(".", "", regex=False)
     .str.replace(",", ".", regex=False)
-)
+    )
 
-df["Stück / Nennwert"] = pd.to_numeric(
+    df["Stück / Nennwert"] = pd.to_numeric(
     df["Stück / Nennwert"],
     errors="coerce"
-).fillna(0)
+    ).fillna(0)
 
-df["Soll_float"] = df["Soll"].apply(
+    df["Soll_float"] = df["Soll"].apply(
     euro_to_float
-)
+    )
 
-df["Haben_float"] = df["Haben"].apply(
+    df["Haben_float"] = df["Haben"].apply(
     euro_to_float
-)
+    )
+    return df
+
+
 
 # --------------------------------------------------
 # Aktuelle Bestände
 # --------------------------------------------------
 
-print("Berechne aktuelle Bestände...")
+def berechne_aktuelle_bestaende(OUTPUT_DIR, KAUF, VERKAUF, WP_EINLAGE, WP_ENTNAHME, aktive_isins, df):
 
-bestandsdaten = []
 
-for isin in sorted(aktive_isins):
+    bestandsdaten = []
 
-    wp = df[df["ISIN"] == isin]
+    for isin in sorted(aktive_isins):
+        wp = df[df["ISIN"] == isin]
 
-    bestand = 0
+        bestand = 0
 
-    for _, row in wp.iterrows():
+        for _, row in wp.iterrows():
+            if row["Vorgang"] in [KAUF, WP_EINLAGE]:
+                bestand += row["Stück / Nennwert"]
 
-        if row["Vorgang"] in [KAUF, WP_EINLAGE]:
-            bestand += row["Stück / Nennwert"]
+            elif row["Vorgang"] in [VERKAUF, WP_ENTNAHME]:
+                bestand -= row["Stück / Nennwert"]
 
-        elif row["Vorgang"] in [VERKAUF, WP_ENTNAHME]:
-            bestand -= row["Stück / Nennwert"]
-
-    if len(wp) > 0:
-
-        bestandsdaten.append(
+        if len(wp) > 0:
+            bestandsdaten.append(
             {
                 "isin": isin,
                 "wertpapier": wp.iloc[0]["Wertpapier"],
@@ -186,69 +189,70 @@ for isin in sorted(aktive_isins):
             }
         )
 
-bestandsliste = pd.DataFrame(
-    bestandsdaten
-)
+    bestandsliste = pd.DataFrame(
+        bestandsdaten
+    )
 
-bestandsliste.sort_values(
-    "wertpapier"
-).to_csv(
-    OUTPUT_DIR / "bestandsliste.csv",
-    sep=";",
-    decimal=",",
-    index=False
-)
+    bestandsliste.sort_values(
+        "wertpapier"
+    ).to_csv(
+        OUTPUT_DIR / "bestandsliste.csv",
+        sep=";",
+        decimal=",",
+        index=False
+    )
+    return bestandsliste
+
+
+
+
 
 # --------------------------------------------------
 # Monatliche Bestände
 # --------------------------------------------------
 
-print("Berechne Monatsbestände...")
+def berechne_monatliche_bestaende(OUTPUT_DIR, KAUF, VERKAUF, WP_EINLAGE, WP_ENTNAHME, aktive_isins, df):
+    print("Berechne Monatsbestände...")
 
-start = df["Buchungstag"].min()
-ende = df["Buchungstag"].max()
+    start = df["Buchungstag"].min()
+    ende = df["Buchungstag"].max()
 
-print(f"Zeitraum: {start.date()} bis {ende.date()}")
+    print(f"Zeitraum: {start.date()} bis {ende.date()}")
 
-monate = pd.date_range(
-    start=start,
-    end=ende,
-    freq="M"
-)
+    monate = pd.date_range(
+        start=start,
+        end=ende,
+        freq="ME"
+    )
 
-monatsdaten = []
+    monatsdaten = []
 
-for monat in monate:
-
-    trans_bis_monat = df[
-        df["Buchungstag"] <= monat
-    ]
-
-    for isin in aktive_isins:
-
-        wp = trans_bis_monat[
-            trans_bis_monat["ISIN"] == isin
+    for monat in monate:
+        trans_bis_monat = df[
+            df["Buchungstag"] <= monat
         ]
 
-        if wp.empty:
-            continue
+        for isin in aktive_isins:
+            wp = trans_bis_monat[
+                trans_bis_monat["ISIN"] == isin
+            ]
 
-        bestand = 0.0
-        investiert = 0.0
+            if wp.empty:
+                continue
 
-        for _, row in wp.iterrows():
+            bestand = 0.0
+            investiert = 0.0
 
-            if row["Vorgang"] in [KAUF, WP_EINLAGE]:
+            for _, row in wp.iterrows():
+                if row["Vorgang"] in [KAUF, WP_EINLAGE]:
+                    bestand += row["Stück / Nennwert"]
+                    investiert += row["Soll_float"]
 
-                bestand += row["Stück / Nennwert"]
-                investiert += row["Soll_float"]
+                elif row["Vorgang"] in [VERKAUF, WP_ENTNAHME]:
+                    bestand -= row["Stück / Nennwert"]
+                    investiert -= row["Haben_float"]
 
-            elif row["Vorgang"] in [VERKAUF, WP_ENTNAHME]:
-
-                bestand -= row["Stück / Nennwert"]
-                investiert -= row["Haben_float"]
-
-        monatsdaten.append(
+            monatsdaten.append(
             {
                 "monat": monat.strftime("%Y-%m"),
                 "isin": isin,
@@ -258,50 +262,79 @@ for monat in monate:
             }
         )
 
-historie_df = pd.DataFrame(
-    monatsdaten
-)
+    historie_df = pd.DataFrame(
+        monatsdaten
+    )
 
-print(
-    f"Monatseinträge: {len(historie_df)}"
-)
+    print(f"Monatseinträge: {len(historie_df)}")
 
-historie_df.to_csv(
-    OUTPUT_DIR / "monatsbestaende.csv",
-    sep=";",
-    decimal=",",
-    index=False
-)
+    historie_df.to_csv(
+        OUTPUT_DIR / "monatsbestaende.csv",
+        sep=";",
+        decimal=",",
+        index=False
+    )
+    return monate,historie_df
+
+
+
+#--------------------------------------------------
+# Pivot-Tabelle erstellen
+#--------------------------------------------------
+def erstelle_pivot_tabelle(historie_df, output_file):
+
+    pivot = historie_df.pivot_table(
+        index="monat",
+        columns="wertpapier",
+        values="bestand",
+        aggfunc="last",
+        fill_value=0
+    )
+
+    pivot = pivot.reset_index()
+
+    pivot.to_csv(
+        output_file,
+        sep=";",
+        decimal=",",
+        index=False
+    )
+
+    print(        f"Pivot-Tabelle geschrieben: {output_file}")
+
+    return pivot
+
+
 
 # --------------------------------------------------
 # Cashflow pro Monat
 # --------------------------------------------------
 
-cashflow = []
+def cashflow_pro_monat(OUTPUT_DIR, KAUF, VERKAUF, WP_EINLAGE, WP_ENTNAHME, df, monate):
+    cashflow = []
 
-for monat in monate:
-
-    monats_df = df[
+    for monat in monate:
+        monats_df = df[
         (df["Buchungstag"].dt.year == monat.year)
         &
         (df["Buchungstag"].dt.month == monat.month)
     ]
 
-    einzahlungen = monats_df.loc[
+        einzahlungen = monats_df.loc[
         monats_df["Vorgang"].isin(
             [KAUF, WP_EINLAGE]
         ),
         "Soll_float"
     ].sum()
 
-    auszahlungen = monats_df.loc[
+        auszahlungen = monats_df.loc[
         monats_df["Vorgang"].isin(
             [VERKAUF, WP_ENTNAHME]
         ),
         "Haben_float"
     ].sum()
 
-    cashflow.append(
+        cashflow.append(
         {
             "monat": monat.strftime("%Y-%m"),
             "einzahlungen": round(einzahlungen, 2),
@@ -313,17 +346,34 @@ for monat in monate:
         }
     )
 
-cashflow_df = pd.DataFrame(
-    cashflow
-)
+    cashflow_df = pd.DataFrame(
+        cashflow
+    )
 
-cashflow_df.to_csv(
-    OUTPUT_DIR / "cashflow_monatlich.csv",
-    sep=";",
-    decimal=",",
-    index=False
-)
+    cashflow_df.to_csv(
+        OUTPUT_DIR / "cashflow_monatlich.csv",
+        sep=";",
+        decimal=",",
+        index=False  
+    )
+    return cashflow_df
+
+
+print("Lade Wertpapierliste...")
+aktive_isins = wertepapierliste_laden(WERTPAPIERE_FILE)
+print(f"Aktive Wertpapiere: {len(aktive_isins)}")
+print("Lade DKB Export...")
+df = transaktionen_laden(TRANSACTIONS_FILE, RELEVANTE_VORGAENGE, euro_to_float, aktive_isins)
+print(f"Relevante Transaktionen: {len(df)}")
+
+print("Berechne aktuelle Bestände...")
+bestandsliste = berechne_aktuelle_bestaende(OUTPUT_DIR, KAUF, VERKAUF, WP_EINLAGE, WP_ENTNAHME, aktive_isins, df)
+monate, historie_df = berechne_monatliche_bestaende(OUTPUT_DIR, KAUF, VERKAUF, WP_EINLAGE, WP_ENTNAHME, aktive_isins, df)
+cashflow_df = cashflow_pro_monat(OUTPUT_DIR, KAUF, VERKAUF, WP_EINLAGE, WP_ENTNAHME, df, monate)
+
+erstelle_pivot_tabelle( historie_df,    OUTPUT_DIR / "pivot_monatsbestaende.csv")
+
 
 print()
 print("Fertig")
-print(bestandsliste.head())
+print(bestandsliste.head(20))
